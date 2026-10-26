@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://nfqweafoehbjbxtxtilt.supabase.co; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
 <title>QA 업무일지</title>
 <style>
 /* Layout: one-column mobile app — sticky header with running-timer strip, four tabs, fixed bottom nav. Cards grouped by work area. */
@@ -197,8 +197,16 @@ h2 .num { letter-spacing: 0; }
 .btn { border: 0; background: var(--accent); color: var(--accent-ink); border-radius: 12px; padding: 13px 16px; font-weight: 700; font-size: 15px; width: 100%; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn.ghost { background: var(--surface); color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
+.btn.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
 .data-box { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .data-box p { margin: 0; font-size: 13px; color: var(--muted); }
+.data-box input[type="email"], .data-box input[type="password"] { border: 1px solid var(--line); background: var(--paper); border-radius: 10px; padding: 11px 12px; width: 100%; font-size: 16px; }
+.data-box label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); font-weight: 500; }
+.sync-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sync-dot { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; }
+.sync-dot::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.sync-dot.on::before { background: var(--ok); } .sync-dot.err::before { background: var(--bad); } .sync-dot.busy::before { background: var(--warn); }
+.note-warn { font-size: 12.5px; color: var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 8px 10px; }
 .data-box .stat { font-size: 13px; color: var(--ink); }
 .data-box .stat.warn { color: var(--warn); }
 .prose { font-size: 13px; color: var(--muted); line-height: 1.6; }
@@ -360,6 +368,8 @@ h2 .num { letter-spacing: 0; }
   <!-- 설정 -->
   <section id="tab-set" data-tab="set" hidden>
     <div class="blk blk-data">
+    <h2>기기 연동 · 암호화</h2>
+    <div class="data-box" id="syncBox"></div>
     <h2>데이터 · 백업</h2>
     <div class="data-box">
       <div class="stat" id="dataStat"></div>
@@ -421,7 +431,7 @@ h2 .num { letter-spacing: 0; }
 
 <script>
 (() => {
-  const APP_VERSION = '2.4';
+  const APP_VERSION = '2.5';
 
   // ---------- work types ----------
   const GROUPS = [
@@ -668,6 +678,7 @@ h2 .num { letter-spacing: 0; }
   function normalizeConfig(c) {
     const out = { targets: {}, weights: {} };
     if (!c || typeof c !== 'object') return out;
+    if (Number.isFinite(Number(c.updatedAt)) && Number(c.updatedAt) > 0) out.updatedAt = Number(c.updatedAt);
     KPI_DEFS.forEach(k => {
       const t = Number(c.targets?.[k.key]), w = Number(c.weights?.[k.key]);
       if (Number.isFinite(t) && t >= 0 && t <= 1e6) out.targets[k.key] = t;
@@ -1119,6 +1130,7 @@ h2 .num { letter-spacing: 0; }
         </div>`).join('')).join('');
     renderDataStat();
     renderDiag();
+    renderSync();
     $('verLabel').textContent = `QA 업무일지 v${APP_VERSION} · ${isNative() ? '안드로이드 앱' : '웹앱'}`;
   }
   function renderDataStat() {
@@ -1274,24 +1286,27 @@ h2 .num { letter-spacing: 0; }
     $('formSave').disabled = true;
     try {
       let msg;
-      for (const p of state.draftNew.values()) await Store.putPhoto({ id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h, createdAt: p.createdAt });
+      for (const p of state.draftNew.values()) { await Store.putPhoto({ id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h, createdAt: p.createdAt }); markPhotoDirty(p.id); }
       if (state.editing) {
         Object.assign(doc, { id: state.editing.id, createdAt: state.editing.createdAt || Date.now(), updatedAt: Date.now() });
         await Store.put(doc);
         const removed = (state.editing.photos || []).filter(id => !photoIds.includes(id));
-        if (removed.length) { await Store.delPhotos(removed); dropPhotoUrls(removed); }
+        if (removed.length) { await Store.delPhotos(removed); dropPhotoUrls(removed); queuePhotoDeletes(removed); }
+        markDirty(doc.id);
         state.logs = state.logs.map(l => l.id === doc.id ? doc : l);
         msg = '수정했습니다';
       } else {
-        Object.assign(doc, { id: newId(), createdAt: Date.now() });
-        await Store.put(doc); state.logs.push(doc);
+        const now = Date.now();
+        Object.assign(doc, { id: newId(), createdAt: now, updatedAt: now });
+        await Store.put(doc); state.logs.push(doc); markDirty(doc.id);
         msg = `${TYPES[type].short} 기록 저장됨`;
         if (type === 'fqc' && (d.samples || []).length) {
           const smp = { id: newId(), type: 'smp', date: doc.date, month: doc.month, item: doc.item, kinds: d.samples.slice(), steps: [], note: '', createdAt: Date.now() + 1 };
           if (doc.partner) smp.partner = doc.partner;
           if (doc.lot) smp.lot = doc.lot;
           smp.open = isOpen(smp);
-          await Store.put(smp); state.logs.push(smp);
+          smp.updatedAt = smp.createdAt;
+          await Store.put(smp); state.logs.push(smp); markDirty(smp.id);
           msg += ' · 관리품 건 추가';
         }
       }
@@ -1382,10 +1397,11 @@ h2 .num { letter-spacing: 0; }
         if (!p || typeof p.id !== 'string' || !ID_RE.test(p.id) || !wanted.has(p.id)) continue;
         if (typeof p.data !== 'string' || p.data.length > 12 * 1024 * 1024 || !/^[A-Za-z0-9+/=]+$/.test(p.data)) continue;
         if (await Store.getPhoto(p.id).catch(() => null)) { photoOk++; continue; }
-        try { const img = await processImage(b64ToBlob(p.data)); await Store.putPhoto({ id: p.id, ...img, createdAt: Date.now() }); photoOk++; } catch { }
+        try { const img = await processImage(b64ToBlob(p.data)); await Store.putPhoto({ id: p.id, ...img, createdAt: Date.now() }); markPhotoDirty(p.id); photoOk++; } catch { }
       }
-      if (data.config && !Object.keys(state.cfg.targets || {}).length) { state.cfg = normalizeConfig(data.config); await Store.set('config', state.cfg); }
+      if (data.config && !Object.keys(state.cfg.targets || {}).length) { state.cfg = normalizeConfig(data.config); state.cfg.updatedAt = Date.now(); await Store.set('config', state.cfg); markDirty('config'); }
       state.logs = (await Store.all()).map(normalizeLog).filter(Boolean);
+      valid.forEach(l => markDirty(l.id));
       toast(`백업에서 ${valid.length}건${photoOk ? `, 사진 ${photoOk}장` : ''}을 불러왔습니다${skipped ? ` · 형식이 맞지 않는 ${skipped}건 제외` : ''}`); setTab(state.tab);
     } catch { toast('파일을 읽지 못했습니다. 백업 파일이 맞는지 확인해 주세요'); }
   }
@@ -1445,7 +1461,8 @@ h2 .num { letter-spacing: 0; }
       state.pendingDelete = null;
       try {
         const gone = byId(id)?.photos || [];
-        await Store.del(id); if (gone.length) { await Store.delPhotos(gone); dropPhotoUrls(gone); }
+        await Store.del(id); if (gone.length) { await Store.delPhotos(gone); dropPhotoUrls(gone); queuePhotoDeletes(gone); }
+        markDeleted(id);
         state.logs = state.logs.filter(l => l.id !== id); toast('삭제했습니다'); render();
       }
       catch { toast('삭제하지 못했습니다. 다시 시도해 주세요.'); }
@@ -1457,7 +1474,7 @@ h2 .num { letter-spacing: 0; }
       const next = { ...l, ...c.patch, updatedAt: Date.now() };
       if ((l.type === 'cs' || l.type === 'sq') && c.patch.status === '완료') next.doneDate = today();
       next.open = isOpen(next);
-      try { await Store.put(next); state.logs = state.logs.map(x => x.id === next.id ? next : x); toast(`${c.label} 처리했습니다`); render(); }
+      try { await Store.put(next); state.logs = state.logs.map(x => x.id === next.id ? next : x); markDirty(next.id); toast(`${c.label} 처리했습니다`); render(); }
       catch { toast('변경하지 못했습니다. 다시 시도해 주세요.'); }
       return;
     }
@@ -1490,9 +1507,336 @@ h2 .num { letter-spacing: 0; }
       if (!isFinite(t) || t < 0 || !isFinite(w) || w < 0) { toast(`${k.name} 값을 확인해 주세요`); return; }
       targets[k.key] = t; weights[k.key] = w;
     }
-    try { state.cfg = { targets, weights, updatedAt: Date.now() }; await Store.set('config', state.cfg); toast('목표를 저장했습니다'); }
+    try { state.cfg = { targets, weights, updatedAt: Date.now() }; await Store.set('config', state.cfg); markDirty('config'); toast('목표를 저장했습니다'); }
     catch { toast('저장하지 못했습니다. 다시 시도해 주세요.'); }
   };
+
+  // ---------- encrypted sync (Supabase) ----------
+  // One password per person. On this device it is stretched (PBKDF2, 600k rounds) and split (HKDF) into
+  //  - an auth secret that is the only thing Supabase ever receives, and
+  //  - an AES-256-GCM key that never leaves the device.
+  // Records and photos are encrypted before upload, so the server only stores ciphertext.
+  const SB_URL = 'https://nfqweafoehbjbxtxtilt.supabase.co';
+  const SB_KEY = 'sb_publishable_QvvH0UMbVb8VPOTHLzLK-A__uFmbET7';
+  const PHOTO_BUCKET = 'vault-photos';
+  const te = new TextEncoder(), td = new TextDecoder();
+  const u8b64 = u8 => { let x = ''; for (let i = 0; i < u8.length; i += 0x8000) x += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(x); };
+  const b64u8 = str => { const bin = atob(str); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };
+  const sync = { session: null, key: null, cursor: '1970-01-01T00:00:00+00:00', dirty: {}, dirtyPhotos: {}, photoDeletes: [], tombs: {}, seq: 0,
+    lastSync: 0, lastError: '', running: false, again: false, mode: 'signup', notice: '', busyMsg: '', badRows: 0 };
+
+  async function deriveKeys(email, password) {
+    const base = await crypto.subtle.importKey('raw', te.encode(password.normalize('NFKC')), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: te.encode('qa-log/v1/' + email.trim().toLowerCase()), iterations: 600000 }, base, 256);
+    const hk = await crypto.subtle.importKey('raw', bits, 'HKDF', false, ['deriveBits', 'deriveKey']);
+    const zero = new Uint8Array(32);
+    const authBits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: zero, info: te.encode('qa-log auth v1') }, hk, 256);
+    const encKey = await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: zero, info: te.encode('qa-log enc v1') }, hk, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    return { authSecret: 'q1.' + u8b64(new Uint8Array(authBits)).replace(/=+$/, ''), encKey };
+  }
+  async function sealJson(obj, aad) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: te.encode(aad) }, sync.key, te.encode(JSON.stringify(obj)));
+    return { iv: u8b64(iv), data: u8b64(new Uint8Array(ct)) };
+  }
+  async function openJson(row, aad) {
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64u8(row.iv), additionalData: te.encode(aad) }, sync.key, b64u8(row.data));
+    return JSON.parse(td.decode(pt));
+  }
+  async function sealBytes(buf, aad) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: te.encode(aad) }, sync.key, buf));
+    const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12); return out;
+  }
+  async function openBytes(buf, aad) {
+    const u = new Uint8Array(buf);
+    return crypto.subtle.decrypt({ name: 'AES-GCM', iv: u.slice(0, 12), additionalData: te.encode(aad) }, sync.key, u.slice(12));
+  }
+  const stampOf = l => Number(l.updatedAt || l.createdAt || 0);
+  const rowAad = id => `${sync.session.uid}:${id}`;
+  const photoAad = id => `${sync.session.uid}:photo:${id}`;
+  const photoPath = id => `${PHOTO_BUCKET}/${sync.session.uid}/${encodeURIComponent(id)}`;
+
+  async function saveSync() {
+    const { session, cursor, dirty, dirtyPhotos, photoDeletes, tombs, seq, lastSync, lastError } = sync;
+    await Store.set('sync', { session, cursor, dirty, dirtyPhotos, photoDeletes, tombs, seq, lastSync, lastError }).catch(() => {});
+  }
+  async function loadSync() {
+    const v = await Store.get('sync').catch(() => null);
+    const k = await Store.get('syncKey').catch(() => null);
+    if (v && v.session && k) {
+      Object.assign(sync, { session: v.session, cursor: v.cursor || sync.cursor, dirty: v.dirty || {}, dirtyPhotos: v.dirtyPhotos || {}, photoDeletes: v.photoDeletes || [],
+        tombs: v.tombs || {}, seq: v.seq || 0, lastSync: v.lastSync || 0, lastError: v.lastError || '' });
+      sync.key = k;
+    }
+  }
+  function markDirty(id) { if (!sync.session) return; sync.dirty[id] = ++sync.seq; scheduleSync(); }
+  function markPhotoDirty(id) { if (!sync.session) return; sync.dirtyPhotos[id] = ++sync.seq; scheduleSync(); }
+  function queuePhotoDeletes(ids) { if (!sync.session || !ids.length) return; ids.forEach(id => { delete sync.dirtyPhotos[id]; if (!sync.photoDeletes.includes(id)) sync.photoDeletes.push(id); }); scheduleSync(); }
+  function markDeleted(id) { if (!sync.session) return; sync.tombs[id] = Date.now(); markDirty(id); }
+  let syncTimer = null;
+  function scheduleSync(ms = 3000) { clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(), ms); saveSync(); }
+
+  function sbError(status, body) {
+    const m = (body && (body.error_description || body.msg || body.message || body.error)) || '';
+    const e = new Error(m || `서버 응답 ${status}`); e.status = status; e.raw = m; return e;
+  }
+  async function sbRaw(path, opts) {
+    let res;
+    try { res = await fetch(SB_URL + path, { cache: 'no-store', ...opts }); }
+    catch { const e = new Error('인터넷에 연결되지 않았어요'); e.offline = true; throw e; }
+    if (!res.ok) { let j = null; try { j = await res.json(); } catch { } throw sbError(res.status, j); }
+    return res;
+  }
+  let refreshing = null;
+  async function ensureToken() {
+    const ss = sync.session; if (!ss) throw sbError(401, { msg: '로그인이 필요해요' });
+    if (Date.now() < ss.expires_at * 1000 - 60000) return;
+    if (!refreshing) refreshing = (async () => {
+      try {
+        const res = await sbRaw('/auth/v1/token?grant_type=refresh_token', { method: 'POST', headers: { apikey: SB_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: ss.refresh_token }) });
+        sync.session = sessionFrom(await res.json()); await saveSync();
+      } catch (e) {
+        if (e.status === 400 || e.status === 401 || e.status === 403) { await disconnect('로그인이 만료됐어요. 다시 로그인해 주세요.'); }
+        throw e;
+      } finally { refreshing = null; }
+    })();
+    return refreshing;
+  }
+  async function sb(path, { method = 'GET', json, bytes, headers = {} } = {}) {
+    await ensureToken();
+    const h = { apikey: SB_KEY, Authorization: 'Bearer ' + sync.session.access_token, ...headers };
+    let body;
+    if (json !== undefined) { h['Content-Type'] = 'application/json'; body = JSON.stringify(json); }
+    if (bytes !== undefined) { h['Content-Type'] = 'application/octet-stream'; body = bytes; }
+    return sbRaw(path, { method, headers: h, body });
+  }
+  function sessionFrom(j) {
+    if (!j || !j.access_token || !j.user) throw sbError(500, { msg: '로그인 응답이 올바르지 않아요' });
+    return { access_token: j.access_token, refresh_token: j.refresh_token, expires_at: Number(j.expires_at) || Math.floor(Date.now() / 1000) + (Number(j.expires_in) || 3600),
+      uid: String(j.user.id), email: String(j.user.email || '') };
+  }
+
+  async function connect(mode, email, pw) {
+    sync.busyMsg = '비밀번호로 잠금 열쇠를 만드는 중…'; renderSync();
+    const { authSecret, encKey } = await deriveKeys(email, pw);
+    sync.busyMsg = mode === 'signup' ? '계정을 만드는 중…' : '로그인하는 중…'; renderSync();
+    let j;
+    if (mode === 'signup') {
+      const res = await sbRaw('/auth/v1/signup', { method: 'POST', headers: { apikey: SB_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: authSecret }) });
+      j = await res.json();
+      if (!j.access_token) {
+        sync.mode = 'login';
+        sync.notice = `${email}로 확인 메일을 보냈어요. 메일의 링크를 누른 뒤, 같은 이메일과 비밀번호로 "로그인"을 눌러 주세요.`;
+        return false;
+      }
+    } else {
+      const res = await sbRaw('/auth/v1/token?grant_type=password', { method: 'POST', headers: { apikey: SB_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: authSecret }) });
+      j = await res.json();
+    }
+    sync.session = sessionFrom(j); sync.key = encKey;
+    Object.assign(sync, { cursor: '1970-01-01T00:00:00+00:00', dirty: {}, dirtyPhotos: {}, photoDeletes: [], tombs: {}, lastSync: 0, lastError: '', notice: '' });
+    // First connection on this device: send everything this device already has. Newer copies win on both sides.
+    state.logs.forEach(l => { sync.dirty[l.id] = ++sync.seq; (l.photos || []).forEach(pid => { sync.dirtyPhotos[pid] = ++sync.seq; }); });
+    if (state.cfg.updatedAt) sync.dirty.config = ++sync.seq;
+    await Store.set('syncKey', encKey);
+    await saveSync();
+    return true;
+  }
+  async function disconnect(msg) {
+    clearTimeout(syncTimer);
+    Object.assign(sync, { session: null, key: null, cursor: '1970-01-01T00:00:00+00:00', dirty: {}, dirtyPhotos: {}, photoDeletes: [], tombs: {}, lastSync: 0, lastError: '', notice: msg || '' });
+    await Store.remove('syncKey').catch(() => {}); await Store.remove('sync').catch(() => {});
+    renderSync();
+  }
+
+  async function applyRemoteDelete(id) {
+    const local = byId(id);
+    if (local) {
+      await Store.del(id);
+      const gone = local.photos || [];
+      if (gone.length) { await Store.delPhotos(gone); dropPhotoUrls(gone); }
+      state.logs = state.logs.filter(l => l.id !== id);
+    }
+  }
+  async function pullRecords() {
+    let changed = false;
+    for (let guard = 0; guard < 200; guard++) {
+      const q = `/rest/v1/vault_items?select=id,kind,updated_at,deleted,iv,data,server_updated&server_updated=gt.${encodeURIComponent(sync.cursor)}&order=server_updated.asc&limit=500`;
+      const rows = await (await sb(q)).json();
+      for (const r of rows) {
+        sync.cursor = r.server_updated;
+        const ts = Number(r.updated_at) || 0;
+        if (r.kind === 'config') {
+          if (ts <= (state.cfg.updatedAt || 0)) continue;
+          try { const c = normalizeConfig(await openJson(r, rowAad(r.id))); c.updatedAt = ts; state.cfg = c; await Store.set('config', c); delete sync.dirty.config; changed = true; }
+          catch { sync.badRows++; }
+          continue;
+        }
+        if (r.kind !== 'log' || !ID_RE.test(String(r.id))) continue;
+        const local = byId(r.id);
+        const localTs = local ? stampOf(local) : (sync.tombs[r.id] || 0);
+        if (ts <= localTs) continue;
+        if (r.deleted) { await applyRemoteDelete(r.id); sync.tombs[r.id] = ts; delete sync.dirty[r.id]; changed = true; continue; }
+        let rec;
+        try { rec = normalizeLog(await openJson(r, rowAad(r.id))); } catch { sync.badRows++; continue; }
+        if (!rec || rec.id !== r.id) continue;
+        rec.updatedAt = ts;
+        await Store.put(rec);
+        const before = local?.photos || [];
+        const dropped = before.filter(x => !(rec.photos || []).includes(x));
+        if (dropped.length) { await Store.delPhotos(dropped); dropPhotoUrls(dropped); }
+        state.logs = local ? state.logs.map(l => l.id === rec.id ? rec : l) : [...state.logs, rec];
+        delete sync.tombs[r.id]; delete sync.dirty[r.id]; changed = true;
+      }
+      if (rows.length < 500) break;
+    }
+    return changed;
+  }
+  async function pushRecords() {
+    const entries = Object.entries(sync.dirty);
+    for (let i = 0; i < entries.length; i += 50) {
+      const batch = entries.slice(i, i + 50), rows = [], sent = [];
+      for (const [id, seq] of batch) {
+        let row;
+        if (id === 'config') {
+          const ts = state.cfg.updatedAt || Date.now();
+          row = { id, kind: 'config', updated_at: ts, deleted: false, ...(await sealJson(state.cfg, rowAad(id))) };
+        } else {
+          const l = byId(id);
+          if (l) row = { id, kind: 'log', updated_at: stampOf(l), deleted: false, ...(await sealJson(l, rowAad(id))) };
+          else if (sync.tombs[id]) row = { id, kind: 'log', updated_at: sync.tombs[id], deleted: true, ...(await sealJson({}, rowAad(id))) };
+        }
+        if (row) { row.user_id = sync.session.uid; rows.push(row); }
+        sent.push([id, seq]);
+      }
+      if (rows.length) await sb('/rest/v1/vault_items?on_conflict=user_id,id', { method: 'POST', json: rows, headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+      sent.forEach(([id, seq]) => { if (sync.dirty[id] === seq) delete sync.dirty[id]; });
+    }
+  }
+  async function pushPhotos() {
+    for (const [id, seq] of Object.entries(sync.dirtyPhotos)) {
+      const rec = await Store.getPhoto(id).catch(() => null);
+      if (rec && rec.blob) {
+        const enc = await sealBytes(await rec.blob.arrayBuffer(), photoAad(id));
+        await sb('/storage/v1/object/' + photoPath(id), { method: 'POST', bytes: enc, headers: { 'x-upsert': 'true' } });
+      }
+      if (sync.dirtyPhotos[id] === seq) delete sync.dirtyPhotos[id];
+    }
+  }
+  async function pushPhotoDeletes() {
+    for (const id of sync.photoDeletes.slice()) {
+      try { await sb('/storage/v1/object/' + photoPath(id), { method: 'DELETE' }); }
+      catch (e) { if (e.offline || e.status >= 500) throw e; }
+      sync.photoDeletes = sync.photoDeletes.filter(x => x !== id);
+    }
+  }
+  async function pullPhotos() {
+    let got = 0;
+    const wanted = [...new Set(state.logs.flatMap(l => l.photos || []))];
+    for (const id of wanted) {
+      if (sync.dirtyPhotos[id] || await Store.getPhoto(id).catch(() => null)) continue;
+      let buf;
+      try { buf = await (await sb('/storage/v1/object/authenticated/' + photoPath(id))).arrayBuffer(); }
+      catch (e) { if (e.offline) throw e; continue; } // not uploaded yet by the other device
+      try {
+        const plain = await openBytes(buf, photoAad(id));
+        const img = await processImage(new Blob([plain], { type: 'image/jpeg' }));
+        await Store.putPhoto({ id, ...img, createdAt: Date.now() }); got++;
+      } catch { sync.badRows++; }
+    }
+    return got;
+  }
+  async function syncNow(manual) {
+    if (!sync.session || !sync.key || !state.ok) return;
+    if (sync.running) { sync.again = true; return; }
+    sync.running = true; sync.badRows = 0; renderSync();
+    try {
+      const pulled = await pullRecords();       // newer copies from other devices first
+      await pushRecords();                      // then this device's changes
+      await pushPhotoDeletes();
+      await pushPhotos();
+      const pulledAgain = await pullRecords();  // advance the cursor past our own upload
+      const photos = await pullPhotos();
+      sync.lastSync = Date.now(); sync.lastError = sync.badRows ? `${sync.badRows}건은 이 비밀번호로 열 수 없어 건너뛰었어요` : '';
+      if (pulled || pulledAgain || photos) render();
+      if (manual) toast('동기화했습니다');
+    } catch (e) {
+      sync.lastError = e.offline ? '인터넷에 연결되지 않아 나중에 다시 시도해요' : friendlySyncError(e);
+      if (manual) toast(sync.lastError);
+    } finally {
+      sync.running = false; await saveSync(); renderSync();
+      if (sync.again) { sync.again = false; scheduleSync(1500); }
+    }
+  }
+  function friendlySyncError(e) {
+    const m = String(e.raw || e.message || '');
+    if (/invalid login credentials/i.test(m)) return '이메일 또는 비밀번호가 맞지 않아요';
+    if (/email not confirmed/i.test(m)) return '아직 메일 확인이 안 됐어요. 메일의 링크를 누른 뒤 다시 로그인해 주세요';
+    if (/already registered|already exists/i.test(m)) return '이미 있는 계정이에요. "로그인"으로 들어가 주세요';
+    if (/signups? not allowed|signup.*disabled/i.test(m)) return '새 계정 만들기가 꺼져 있어요';
+    if (/rate limit|too many/i.test(m)) return '요청이 너무 많아요. 잠시 후 다시 시도해 주세요';
+    if (/relation .* does not exist|could not find the table/i.test(m)) return '서버 준비(SQL)가 아직 안 됐어요';
+    return m ? `연동 오류: ${m}` : '연동 중 오류가 났어요';
+  }
+  function ago(ts) {
+    const m = Math.floor((Date.now() - ts) / 60000);
+    return m < 1 ? '방금' : m < 60 ? `${m}분 전` : m < 1440 ? `${Math.floor(m / 60)}시간 전` : `${Math.floor(m / 1440)}일 전`;
+  }
+  function renderSync() {
+    const box = $('syncBox'); if (!box) return;
+    if (sync.session) {
+      const pending = Object.keys(sync.dirty).length + Object.keys(sync.dirtyPhotos).length;
+      const cls = sync.running ? 'busy' : sync.lastError ? 'err' : 'on';
+      const label = sync.running ? '동기화 중…' : sync.lastError ? '확인 필요' : '연결됨';
+      box.innerHTML = `<div class="sync-head"><span class="sync-dot ${cls}">${label}</span><span class="num" style="font-size:12px;color:var(--muted)">${esc(sync.session.email)}</span></div>
+        <div class="stat">${sync.lastSync ? `마지막 동기화 ${ago(sync.lastSync)}` : '아직 동기화 전'}${pending ? ` · 보낼 변경 ${pending}건` : ''}</div>
+        ${sync.lastError ? `<div class="note-warn">${esc(sync.lastError)}</div>` : ''}
+        <button class="btn" id="syncNowBtn" ${sync.running ? 'disabled' : ''}>지금 동기화</button>
+        <button class="btn ghost" id="syncOffBtn">이 기기 연동 해제</button>
+        <p>같은 계정으로 로그인한 기기끼리 기록 · 사진 · KPI 목표가 맞춰집니다. 이 기기에서 잠근 뒤 보내므로 서버에서는 내용을 볼 수 없어요. 연동을 해제해도 이 기기 안의 기록은 그대로 남습니다.</p>`;
+      return;
+    }
+    const su = sync.mode === 'signup';
+    box.innerHTML = `<div class="sync-head"><span class="sync-dot">연동 안 함</span>
+        <span class="seg" role="group" aria-label="연동 시작 방법"><button data-syncmode="signup" aria-pressed="${su}">처음 시작</button><button data-syncmode="login" aria-pressed="${!su}">로그인</button></span></div>
+      <p>${su ? '연동할 계정을 새로 만듭니다. 처음 한 번만 하면 돼요.' : '다른 기기에서 만든 계정으로 들어갑니다. 그 기기와 같은 이메일 · 비밀번호를 입력하세요.'}</p>
+      ${sync.notice ? `<div class="note-warn">${esc(sync.notice)}</div>` : ''}
+      <label>이메일<input type="email" id="sbEmail" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false"></label>
+      <label>비밀번호 (10자 이상)<input type="password" id="sbPw" autocomplete="${su ? 'new-password' : 'current-password'}"></label>
+      ${su ? '<label>비밀번호 확인<input type="password" id="sbPw2" autocomplete="new-password"></label>' : ''}
+      <div class="note-warn">이 비밀번호로 기록을 잠급니다. <b>잊어버리면 서버에 있는 기록은 누구도 되살릴 수 없어요.</b> 기기 안의 기록은 남지만, 안전한 곳에 적어 두세요.</div>
+      <div class="stat" id="syncBusy">${esc(sync.busyMsg)}</div>
+      <button class="btn" id="syncGo">${su ? '계정 만들고 연동 시작' : '로그인하고 연동 시작'}</button>`;
+  }
+  async function onSyncGo() {
+    const email = ($('sbEmail')?.value || '').trim(), pw = $('sbPw')?.value || '', pw2 = $('sbPw2')?.value;
+    const say = m => { sync.notice = m; sync.busyMsg = ''; renderSync(); if ($('sbEmail')) $('sbEmail').value = email; };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return say('이메일 주소를 확인해 주세요.');
+    if (pw.length < 10) return say('비밀번호는 10자 이상으로 정해 주세요.');
+    if (sync.mode === 'signup' && pw !== pw2) return say('비밀번호 확인이 일치하지 않아요.');
+    if (!(window.crypto && crypto.subtle)) return say('이 브라우저에서는 암호화를 쓸 수 없어요.');
+    $('syncGo').disabled = true;
+    try {
+      const ok = await connect(sync.mode, email, pw);
+      sync.busyMsg = '';
+      if (ok) { renderSync(); toast('연동을 시작했습니다'); await syncNow(); }
+      else renderSync();
+    } catch (e) {
+      sync.busyMsg = '';
+      say(e.offline ? '인터넷에 연결되지 않았어요.' : friendlySyncError(e));
+    }
+  }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.syncmode) { sync.mode = b.dataset.syncmode; sync.notice = ''; renderSync(); }
+    else if (b.id === 'syncGo') onSyncGo();
+    else if (b.id === 'syncNowBtn') syncNow(true);
+    else if (b.id === 'syncOffBtn') {
+      if (!sync.offArm) { sync.offArm = true; b.textContent = '한 번 더 누르면 연동을 해제합니다'; b.classList.add('danger'); setTimeout(() => { sync.offArm = false; renderSync(); }, 3500); return; }
+      sync.offArm = false; disconnect('이 기기의 연동을 해제했어요. 기록은 그대로 남아 있습니다.').then(() => toast('연동을 해제했습니다'));
+    }
+  });
 
   // ---------- diagnostics ----------
   const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
@@ -1557,7 +1901,12 @@ h2 .num { letter-spacing: 0; }
   renderHeader(); renderRec();
   let lastDay = today();
   setInterval(() => { if (today() !== lastDay) { lastDay = today(); render(); } }, 60000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) render(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    render();
+    if (sync.session && Date.now() - sync.lastSync > 60000) syncNow();
+  });
+  setInterval(() => { if (!document.hidden && sync.session) syncNow(); }, 5 * 60000);
   (async () => {
     try {
       await Store.open();
@@ -1574,7 +1923,9 @@ h2 .num { letter-spacing: 0; }
     hookBackButton();
     registerServiceWorker();
     await loadDiag();
+    if (state.ok) await loadSync();
     render();
+    if (sync.session) syncNow();
   })();
 })();
 </script>
