@@ -255,7 +255,8 @@ h2 .num { letter-spacing: 0; }
 .sugg button { border: 1px dashed var(--line); background: none; border-radius: 999px; padding: 3px 10px; font-size: 12px; color: var(--muted); }
 .stepper { display: flex; align-items: center; gap: 0; border: 1px solid var(--line); border-radius: 10px; width: fit-content; background: var(--paper); }
 .stepper button { border: 0; background: none; width: 48px; height: 44px; font-size: 20px; color: var(--accent); }
-.stepper output { min-width: 48px; text-align: center; font-family: var(--f-mono); font-size: 18px; font-weight: 600; }
+.field .stepper input[type="text"] { width: 72px; height: 44px; border: 0; border-left: 1px solid var(--line); border-right: 1px solid var(--line); background: var(--surface); text-align: center; font-family: var(--f-mono); font-size: 18px; font-weight: 600; border-radius: 0; padding: 0 4px; }
+.field .stepper input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
 .err { color: var(--bad); font-size: 13px; }
 
 .photos { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -431,7 +432,7 @@ h2 .num { letter-spacing: 0; }
 
 <script>
 (() => {
-  const APP_VERSION = '2.5';
+  const APP_VERSION = '2.6';
 
   // ---------- work types ----------
   const GROUPS = [
@@ -1234,7 +1235,7 @@ h2 .num { letter-spacing: 0; }
       if (x.type === 'step') {
         return `<div class="field">${head}<div class="stepper">
           <button type="button" data-step="${x.f}" data-d="-1" data-min="${x.min || 0}" aria-label="줄이기">−</button>
-          <output id="${id}">${d[x.f] ?? x.def}</output>
+          <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" id="${id}" data-f="${x.f}" data-num="${x.min || 0}" value="${esc(d[x.f] ?? x.def)}" aria-label="${esc(x.label)}" autocomplete="off">
           <button type="button" data-step="${x.f}" data-d="1" data-min="${x.min || 0}" aria-label="늘리기">+</button></div></div>`;
       }
       return '';
@@ -1261,6 +1262,7 @@ h2 .num { letter-spacing: 0; }
       let v = d[x.f];
       if (typeof v === 'string') v = v.trim();
       if (x.type === 'multi') { const allowed = optsOf(x, d); v = (Array.isArray(v) ? v : []).filter(o => allowed.includes(o)); }
+      if (x.type === 'step') { const n = parseInt(String(v ?? ''), 10); v = Number.isFinite(n) ? Math.min(9999, Math.max(x.min || 0, n)) : (x.min || 1); }
       if (x.type === 'num') { const n = Number(String(v ?? '').replace(/[^0-9.]/g, '')); v = String(v ?? '').trim() && isFinite(n) ? n : undefined; }
       if (v !== '' && v !== undefined && v !== null) doc[x.f] = v;
     });
@@ -1275,6 +1277,8 @@ h2 .num { letter-spacing: 0; }
 
   async function saveForm() {
     const type = state.draftType, d = state.draft;
+    const badStep = FORMS[type].find(x => x.type === 'step' && (!x.show || x.show(d)) && !(parseInt(String(d[x.f] ?? ''), 10) >= (x.min || 0)));
+    if (badStep) { $('formErr').textContent = `${badStep.label}는 ${badStep.min || 0} 이상의 숫자로 입력해 주세요.`; $('formErr').hidden = false; return; }
     const miss = FORMS[type].find(x => x.req && (!x.show || x.show(d)) && (x.type === 'multi' ? !(d[x.f] || []).length : !String(d[x.f] || '').trim()));
     const err = m => { $('formErr').textContent = m; $('formErr').hidden = false; };
     if (miss) return err(`${miss.label}을(를) ${miss.type === 'multi' ? '선택' : '입력'}해 주세요.`);
@@ -1451,8 +1455,9 @@ h2 .num { letter-spacing: 0; }
     if (b.dataset.sugg) { state.draft[b.dataset.sugg] = b.dataset.v; return renderForm(); }
     if (b.dataset.step) {
       const f = b.dataset.step; const min = Number(b.dataset.min || 1);
-      state.draft[f] = Math.max(min, (Number(state.draft[f]) || min) + Number(b.dataset.d));
-      $('fld_' + f).textContent = state.draft[f]; return;
+      const cur = parseInt(String(state.draft[f] ?? '').replace(/[^0-9]/g, ''), 10);
+      state.draft[f] = Math.min(9999, Math.max(min, (Number.isFinite(cur) ? cur : min) + Number(b.dataset.d)));
+      $('fld_' + f).value = state.draft[f]; return;
     }
     if (b.dataset.edit) { const l = byId(b.dataset.edit); if (l) openForm(l.type, l); return; }
     if (b.dataset.del) {
@@ -1479,12 +1484,14 @@ h2 .num { letter-spacing: 0; }
       return;
     }
   });
+  document.addEventListener('focusin', e => { if (e.target && e.target.dataset && e.target.dataset.num !== undefined) setTimeout(() => e.target.select(), 0); });
   document.addEventListener('change', e => {
     if (e.target && (e.target.id === 'photoCam' || e.target.id === 'photoPick')) { addPhotos(e.target.files); e.target.value = ''; }
   });
   $('viewer').addEventListener('click', e => { if (e.target.id === 'viewer') closeViewer(); });
   document.addEventListener('input', e => {
     const f = e.target.dataset?.f; if (!f || !state.draftType) return;
+    if (e.target.dataset.num !== undefined) { const v = e.target.value.replace(/[^0-9]/g, '').slice(0, 4); if (v !== e.target.value) e.target.value = v; }
     state.draft[f] = e.target.value;
     if (f === 'mins') { const n = Number(e.target.value.replace(/[^0-9]/g, '')); $('minsRead').textContent = n ? fmtMins(n) : ''; }
   });
