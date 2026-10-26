@@ -250,6 +250,23 @@ h2 .num { letter-spacing: 0; }
 .stepper output { min-width: 48px; text-align: center; font-family: var(--f-mono); font-size: 18px; font-weight: 600; }
 .err { color: var(--bad); font-size: 13px; }
 
+.photos { display: flex; gap: 8px; flex-wrap: wrap; }
+.ph { position: relative; width: 72px; height: 72px; border-radius: 10px; overflow: hidden; background: var(--paper); border: 1px solid var(--line); flex: none; }
+.ph-open { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: none; }
+.ph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ph .del { position: absolute; top: 3px; right: 3px; width: 24px; height: 24px; border-radius: 50%; border: 0; background: rgba(10, 14, 22, .65); color: #fff; font-size: 14px; line-height: 24px; padding: 0; }
+.ph .more { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(10, 14, 22, .55); color: #fff; font-weight: 600; font-size: 14px; pointer-events: none; }
+.row-photos { display: flex; gap: 6px; margin-top: 4px; }
+.row-photos .ph { width: 54px; height: 54px; border-radius: 8px; }
+.photo-busy { font-size: 12px; color: var(--muted); }
+.viewer { position: fixed; inset: 0; z-index: 40; background: rgba(5, 7, 12, .94); display: flex; align-items: center; justify-content: center;
+  padding: calc(56px + env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) calc(56px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px)); }
+.viewer img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
+.viewer .vbtn { position: absolute; border: 0; background: rgba(255, 255, 255, .14); color: #fff; width: 44px; height: 44px; border-radius: 50%; font-size: 22px; }
+.viewer .vclose { top: calc(8px + env(safe-area-inset-top, 0px)); right: max(12px, env(safe-area-inset-right, 0px)); }
+.viewer .vprev { left: max(12px, env(safe-area-inset-left, 0px)); top: 50%; transform: translateY(-50%); }
+.viewer .vnext { right: max(12px, env(safe-area-inset-right, 0px)); top: 50%; transform: translateY(-50%); }
+.viewer .vcount { position: absolute; top: calc(18px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); color: #fff; font-family: var(--f-mono); font-size: 13px; opacity: .8; }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(84px + env(safe-area-inset-bottom, 0px)); z-index: 30;
   background: var(--ink); color: var(--paper); padding: 10px 16px; border-radius: 999px; font-size: 14px; max-width: calc(100% - 32px); box-shadow: var(--shadow); text-align: center; }
 
@@ -393,11 +410,18 @@ h2 .num { letter-spacing: 0; }
     <button class="btn" id="formSave">저장</button>
   </div>
 </div>
+<div class="viewer" id="viewer" role="dialog" aria-modal="true" aria-label="사진 크게 보기" hidden>
+  <img id="viewerImg" alt="">
+  <span class="vcount" id="viewerCount"></span>
+  <button class="vbtn vclose" data-viewer="close" aria-label="닫기">×</button>
+  <button class="vbtn vprev" data-viewer="prev" aria-label="이전 사진">‹</button>
+  <button class="vbtn vnext" data-viewer="next" aria-label="다음 사진">›</button>
+</div>
 <div class="toast" id="toast" hidden></div>
 
 <script>
 (() => {
-  const APP_VERSION = '2.3';
+  const APP_VERSION = '2.4';
 
   // ---------- work types ----------
   const GROUPS = [
@@ -588,8 +612,13 @@ h2 .num { letter-spacing: 0; }
     db: null,
     open() {
       return new Promise((res, rej) => {
-        const r = indexedDB.open('qalog', 1);
-        r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('logs', { keyPath: 'id' }); d.createObjectStore('kv'); };
+        const r = indexedDB.open('qalog', 2);
+        r.onupgradeneeded = () => {
+          const d = r.result;
+          if (!d.objectStoreNames.contains('logs')) d.createObjectStore('logs', { keyPath: 'id' });
+          if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
+          if (!d.objectStoreNames.contains('photos')) d.createObjectStore('photos', { keyPath: 'id' });
+        };
         r.onsuccess = () => { this.db = r.result; res(); };
         r.onerror = () => rej(r.error);
       });
@@ -608,10 +637,14 @@ h2 .num { letter-spacing: 0; }
     get(k) { return this.run('kv', 'readonly', s => s.get(k)); },
     set(k, v) { return this.run('kv', 'readwrite', s => s.put(v, k)); },
     remove(k) { return this.run('kv', 'readwrite', s => s.delete(k)); },
+    getPhoto(id) { return this.run('photos', 'readonly', s => s.get(id)); },
+    putPhoto(p) { return this.run('photos', 'readwrite', s => s.put(p)); },
+    delPhotos(ids) { return this.run('photos', 'readwrite', s => { ids.forEach(id => s.delete(id)); return null; }); },
   };
 
   // Every record is rebuilt from a whitelist of fields with fixed types, so a tampered
   // backup file cannot smuggle markup or unexpected fields into the app.
+  const MAX_PHOTOS = 20;
   const ID_RE = /^[A-Za-z0-9_-]{1,64}$/, DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   const STR_FIELDS = ['partner', 'item', 'defect', 'action', 'lot', 'detail', 'invoice', 'line', 'note', 'kind', 'status', 'result', 'purpose', 'ptype', 'doneDate', 'topic', 'mtype', 'followup', 'title', 'category'];
   const NUM_FIELDS = { lots: [1, 9999], ngCount: [1, 9999], qty: [0, 1000000], mins: [1, 100000] };
@@ -625,6 +658,7 @@ h2 .num { letter-spacing: 0; }
     STR_FIELDS.forEach(f => { const v = r[f]; if (typeof v === 'string' && v) l[f] = v.slice(0, f === 'note' ? 2000 : 300); });
     Object.entries(NUM_FIELDS).forEach(([f, [lo, hi]]) => { if (r[f] == null || r[f] === '') return; const n = Math.round(Number(r[f])); if (Number.isFinite(n) && n >= lo && n <= hi) l[f] = n; });
     ARR_FIELDS.forEach(f => { if (Array.isArray(r[f])) l[f] = r[f].filter(x => typeof x === 'string').map(x => x.slice(0, 50)).slice(0, 20); });
+    if (Array.isArray(r.photos)) { const ph = r.photos.filter(x => typeof x === 'string' && ID_RE.test(x)).slice(0, MAX_PHOTOS); if (ph.length) l.photos = ph; }
     TIME_FIELDS.forEach(f => { const n = Number(r[f]); if (Number.isFinite(n) && n > 0 && n < 1e14) l[f] = n; });
     if (l.doneDate && !DATE_RE.test(l.doneDate)) delete l.doneDate;
     if (!l.createdAt) l.createdAt = Date.now();
@@ -769,6 +803,102 @@ h2 .num { letter-spacing: 0; }
     return { title, sub: parts.filter(Boolean).map(x => x.startsWith('<') ? x : `<span>${x}</span>`).join('') };
   }
 
+  // ---------- photos ----------
+  const photoCache = new Map(); // `${id}:t|f` -> object URL
+  async function photoUrl(id, full) {
+    const key = id + (full ? ':f' : ':t');
+    if (photoCache.has(key)) return photoCache.get(key);
+    const rec = state.draftNew?.get(id) || await Store.getPhoto(id);
+    if (!rec) return '';
+    const blob = full ? rec.blob : (rec.thumb || rec.blob);
+    if (!blob) return '';
+    const url = URL.createObjectURL(blob);
+    photoCache.set(key, url);
+    return url;
+  }
+  function dropPhotoUrls(ids) {
+    ids.forEach(id => ['t', 'f'].forEach(k => { const u = photoCache.get(id + ':' + k); if (u) { URL.revokeObjectURL(u); photoCache.delete(id + ':' + k); } }));
+  }
+  function hydratePhotos(root) {
+    (root || document).querySelectorAll('img[data-ph]:not([src])').forEach(async img => {
+      const url = await photoUrl(img.dataset.ph, false).catch(() => '');
+      if (url) img.src = url; else img.alt = '사진 없음';
+    });
+  }
+  function photoStrip(l) {
+    const ids = l.photos || []; if (!ids.length) return '';
+    const shown = ids.slice(0, 4);
+    return `<div class="row-photos">${shown.map((id, i) => `<div class="ph"><button class="ph-open" data-view="${esc(l.id)}" data-vi="${i}" aria-label="사진 ${i + 1} 크게 보기"><img data-ph="${esc(id)}" alt=""></button>${i === 3 && ids.length > 4 ? `<span class="more">+${ids.length - 4}</span>` : ''}</div>`).join('')}</div>`;
+  }
+  function loadImage(file) {
+    return new Promise((res, rej) => {
+      const url = URL.createObjectURL(file); const img = new Image();
+      img.onload = () => res({ img, url }); img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('decode')); };
+      img.src = url;
+    });
+  }
+  async function drawScaled(src, w0, h0, max, quality) {
+    const sc = Math.min(1, max / Math.max(w0, h0));
+    const w = Math.max(1, Math.round(w0 * sc)), h = Math.max(1, Math.round(h0 * sc));
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); g.drawImage(src, 0, 0, w, h);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', quality));
+    if (!blob) throw new Error('encode');
+    return { blob, w, h };
+  }
+  // Re-encodes every photo: shrinks it for storage and strips camera metadata such as GPS location.
+  async function processImage(file) {
+    let src, w0, h0, cleanup = () => {};
+    try {
+      src = await createImageBitmap(file, { imageOrientation: 'from-image' }); w0 = src.width; h0 = src.height;
+      cleanup = () => src.close && src.close();
+    } catch {
+      const { img, url } = await loadImage(file); src = img; w0 = img.naturalWidth; h0 = img.naturalHeight;
+      cleanup = () => URL.revokeObjectURL(url);
+    }
+    try {
+      if (!w0 || !h0) throw new Error('empty');
+      const full = await drawScaled(src, w0, h0, 1600, 0.82);
+      const thumb = await drawScaled(src, w0, h0, 360, 0.75);
+      return { blob: full.blob, thumb: thumb.blob, w: full.w, h: full.h };
+    } finally { cleanup(); }
+  }
+  async function addPhotos(files) {
+    const list = Array.from(files || []).filter(f => f && (!f.type || f.type.startsWith('image/')));
+    if (!list.length) return;
+    const d = state.draft; d.photos = d.photos || [];
+    const room = MAX_PHOTOS - d.photos.length - state.draftNew.size;
+    if (room <= 0) { toast(`사진은 한 기록에 ${MAX_PHOTOS}장까지 넣을 수 있어요`); return; }
+    const busy = $('photoBusy'); if (busy) busy.hidden = false;
+    let failed = 0;
+    for (const f of list.slice(0, room)) {
+      try { const p = await processImage(f); const id = newId(); state.draftNew.set(id, { id, ...p, createdAt: Date.now() }); }
+      catch { failed++; }
+    }
+    if (list.length > room) toast(`사진은 한 기록에 ${MAX_PHOTOS}장까지라 ${list.length - room}장은 빼고 넣었어요`);
+    else if (failed) toast(`${failed}장은 열 수 없는 형식이에요. 카메라 설정에서 HEIF 대신 JPG로 저장해 주세요`);
+    renderPhotoField();
+  }
+  function draftPhotoIds() { return [...(state.draft.photos || []), ...state.draftNew.keys()]; }
+  function renderPhotoField() {
+    const box = $('formPhotos'); if (!box) return;
+    const ids = draftPhotoIds();
+    box.innerHTML = ids.map((id, i) => `<div class="ph"><button class="ph-open" type="button" data-view="__draft" data-vi="${i}" aria-label="사진 ${i + 1} 크게 보기"><img data-ph="${esc(id)}" alt=""></button><button type="button" class="del" data-phdel="${esc(id)}" aria-label="사진 ${i + 1} 빼기">×</button></div>`).join('');
+    $('photoCount').textContent = ids.length ? `${ids.length}장` : '';
+    const busy = $('photoBusy'); if (busy) busy.hidden = true;
+    hydratePhotos(box);
+  }
+  const viewer = { ids: [], i: 0 };
+  async function showViewer() {
+    const id = viewer.ids[viewer.i]; if (!id) return;
+    $('viewer').hidden = false;
+    $('viewerCount').textContent = viewer.ids.length > 1 ? `${viewer.i + 1} / ${viewer.ids.length}` : '';
+    document.querySelector('.vprev').hidden = document.querySelector('.vnext').hidden = viewer.ids.length < 2;
+    $('viewerImg').src = await photoUrl(id, true).catch(() => '') || await photoUrl(id, false).catch(() => '');
+  }
+  function openViewer(ids, i) { viewer.ids = ids; viewer.i = Math.max(0, Math.min(i, ids.length - 1)); showViewer(); }
+  function closeViewer() { $('viewer').hidden = true; $('viewerImg').removeAttribute('src'); }
+
   function rowHTML(l, opts = {}) {
     const t = TYPES[l.type]; if (!t) return '';
     const d = describe(l);
@@ -780,6 +910,7 @@ h2 .num { letter-spacing: 0; }
         <div class="row-title">${d.title || '(이름 없음)'}</div>
         <div class="row-sub">${d.sub}</div>
         ${l.note ? `<div class="row-note">${esc(l.note)}</div>` : ''}
+        ${photoStrip(l)}
         <div class="row-sub num" style="font-size:11px">${recNo(l)}${opts.showDate ? ' · ' + dayLabel(l.date) : ''}${when}</div>
         <div class="row-acts">
           ${l.open ? closers(l).map((c, i) => `<button class="mini ${c.cls}" data-close="${esc(l.id)}" data-ci="${i}">${c.label}</button>`).join('') : ''}
@@ -1005,6 +1136,7 @@ h2 .num { letter-spacing: 0; }
     if (state.tab === 'kpi') renderKpi();
     if (state.tab === 'log') renderLog();
     if (state.tab === 'set') renderDataStat();
+    hydratePhotos(document.querySelector(`[data-tab="${state.tab}"]`));
   }
 
   function setTab(t) {
@@ -1045,7 +1177,7 @@ h2 .num { letter-spacing: 0; }
       FORMS[type].forEach(x => { if (x.def !== undefined) d[x.f] = Array.isArray(x.def) ? x.def.slice() : x.def; });
     }
     if (prefill) Object.assign(d, prefill);
-    state.draft = d;
+    state.draft = d; state.draftNew = new Map();
     const t = TYPES[type];
     $('sheet').style.setProperty('--tc', t.color);
     $('sheetTitle').innerHTML = `<span class="code">${t.code}</span>${t.label} ${existing ? '수정' : '기록'}`;
@@ -1056,6 +1188,8 @@ h2 .num { letter-spacing: 0; }
     document.body.style.overflow = 'hidden';
   }
   function closeForm() {
+    if (state.draftNew && state.draftNew.size) { dropPhotoUrls([...state.draftNew.keys()]); }
+    state.draftNew = new Map();
     $('scrim').hidden = true; $('sheet').hidden = true; state.draftType = null; state.editing = null;
     document.body.style.overflow = '';
   }
@@ -1093,12 +1227,18 @@ h2 .num { letter-spacing: 0; }
       }
       return '';
     }).join('') + `
+      <div class="field"><span>사진<i>선택 · 여러 장 가능</i> <i id="photoCount"></i></span>
+        <div class="photos" id="formPhotos"></div>
+        <div class="quick"><button type="button" data-photo="camera">카메라로 찍기</button><button type="button" data-photo="pick">사진 선택</button><span class="photo-busy" id="photoBusy" hidden>사진 넣는 중…</span></div>
+        <input type="file" id="photoCam" accept="image/*" capture="environment" hidden>
+        <input type="file" id="photoPick" accept="image/*" multiple hidden></div>
       <div class="field"><span>소요 시간${d.startAt && d.endAt ? `<i>타이머 ${hm(d.startAt)}–${hm(d.endAt)}</i>` : ''}</span>
         <div class="dur"><input type="text" inputmode="numeric" id="fld_mins" data-f="mins" value="${esc(d.mins ?? '')}" placeholder="0"><span class="unit">분</span><span class="read" id="minsRead">${d.mins ? fmtMins(Number(d.mins)) : ''}</span></div>
         <div class="quick">${[15, 30, 60, 90, 120, 240].map(m => `<button type="button" data-mins="${m}">${fmtMins(m)}</button>`).join('')}</div></div>
       <div class="field"><span>메모<i>키보드 마이크로 말해서 입력해도 돼요</i></span><textarea id="fld_note" data-f="note" placeholder="특이사항, 후속 조치 등">${esc(d.note || '')}</textarea></div>
       <div class="field"><span>날짜</span><input type="date" id="fld_date" data-f="date" value="${esc(d.date)}" max="${today()}"></div>`;
     $('formBody').innerHTML = html;
+    renderPhotoField();
   }
 
   function buildDoc(type, d) {
@@ -1129,12 +1269,17 @@ h2 .num { letter-spacing: 0; }
     if (!d.date) return err('날짜를 선택해 주세요.');
     if (!state.ok) return err('저장소를 열지 못해 저장할 수 없습니다. 앱을 다시 실행해 주세요.');
     const doc = buildDoc(type, d);
+    const photoIds = draftPhotoIds();
+    if (photoIds.length) doc.photos = photoIds;
     $('formSave').disabled = true;
     try {
       let msg;
+      for (const p of state.draftNew.values()) await Store.putPhoto({ id: p.id, blob: p.blob, thumb: p.thumb, w: p.w, h: p.h, createdAt: p.createdAt });
       if (state.editing) {
         Object.assign(doc, { id: state.editing.id, createdAt: state.editing.createdAt || Date.now(), updatedAt: Date.now() });
         await Store.put(doc);
+        const removed = (state.editing.photos || []).filter(id => !photoIds.includes(id));
+        if (removed.length) { await Store.delPhotos(removed); dropPhotoUrls(removed); }
         state.logs = state.logs.map(l => l.id === doc.id ? doc : l);
         msg = '수정했습니다';
       } else {
@@ -1151,6 +1296,8 @@ h2 .num { letter-spacing: 0; }
         }
       }
       if (d._fromTimer) { state.timer = null; await Store.remove('timer'); }
+      if (photoIds.length) msg += ` · 사진 ${photoIds.length}장`;
+      state.draftNew = new Map(); // saved: keep their preview URLs cached
       closeForm(); toast(msg); render();
     } catch (e) {
       err('저장하지 못했습니다. 다시 눌러 주세요. 계속 안 되면 앱을 다시 실행해 주세요.');
@@ -1185,11 +1332,11 @@ h2 .num { letter-spacing: 0; }
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   function buildCsv(logs) {
-    const head = ['날짜', '업무', '코드', '대상', '내용', '미결', '소요(분)', '시작', '종료', '메모', '기록번호'];
+    const head = ['날짜', '업무', '코드', '대상', '내용', '미결', '소요(분)', '시작', '종료', '메모', '사진', '기록번호'];
     const rows = logs.slice().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : (a.createdAt || 0) - (b.createdAt || 0)).map(l => {
       const [t, d] = summary(l);
       return [l.date, TYPES[l.type]?.label, TYPES[l.type]?.code, t.filter(Boolean).join(' / '), d.filter(Boolean).join(' / '), l.open ? '미결' : '',
-        l.mins || '', l.startAt ? hm(l.startAt) : '', l.endAt ? hm(l.endAt) : '', l.note, recNo(l)];
+        l.mins || '', l.startAt ? hm(l.startAt) : '', l.endAt ? hm(l.endAt) : '', l.note, l.photos?.length ? `${l.photos.length}장` : '', recNo(l)];
     });
     return '﻿' + [head, ...rows].map(r => r.map(csvCell).join(',')).join('\n');
   }
@@ -1200,8 +1347,21 @@ h2 .num { letter-spacing: 0; }
     try { await shareFile(`QA업무일지_${state.month}.csv`, buildCsv([...ml, ...extraOpen]), 'text/csv'); }
     catch { toast('파일을 만들지 못했습니다'); }
   }
+  const blobToB64 = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
+  function b64ToBlob(b64) {
+    const bin = atob(b64); const u = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    return new Blob([u], { type: 'image/jpeg' });
+  }
   async function exportJson() {
-    const data = { app: 'qa-log', schema: 1, exportedAt: new Date().toISOString(), logs: state.logs, config: state.cfg };
+    const photos = [];
+    const ids = [...new Set(state.logs.flatMap(l => l.photos || []))];
+    for (const id of ids) {
+      const rec = await Store.getPhoto(id).catch(() => null);
+      if (rec && rec.blob) photos.push({ id, w: rec.w, h: rec.h, data: await blobToB64(rec.blob) });
+    }
+    const data = { app: 'qa-log', schema: 2, exportedAt: new Date().toISOString(), logs: state.logs, config: state.cfg, photos };
+    if (photos.length) toast(`사진 ${photos.length}장을 포함해 백업 파일을 만드는 중…`);
     try {
       await shareFile(`QA업무일지_백업_${today()}.json`, JSON.stringify(data), 'application/json');
       state.lastExport = Date.now(); await Store.set('lastExport', state.lastExport); renderDataStat();
@@ -1209,15 +1369,24 @@ h2 .num { letter-spacing: 0; }
   }
   async function importJson(file) {
     try {
-      if (file.size > 20 * 1024 * 1024) { toast('파일이 너무 큽니다'); return; }
+      if (file.size > 400 * 1024 * 1024) { toast('파일이 너무 큽니다'); return; }
       const data = JSON.parse(await file.text());
       if (!data || data.app !== 'qa-log' || !Array.isArray(data.logs)) { toast('QA 업무일지 백업 파일이 아닙니다'); return; }
       const valid = data.logs.slice(0, 50000).map(normalizeLog).filter(Boolean);
       const skipped = Math.min(data.logs.length, 50000) - valid.length;
       await Store.putMany(valid);
+      // Photos: only accept real images, re-encoded on this device (also regenerates thumbnails).
+      let photoOk = 0;
+      const wanted = new Set(valid.flatMap(l => l.photos || []));
+      for (const p of Array.isArray(data.photos) ? data.photos.slice(0, 20000) : []) {
+        if (!p || typeof p.id !== 'string' || !ID_RE.test(p.id) || !wanted.has(p.id)) continue;
+        if (typeof p.data !== 'string' || p.data.length > 12 * 1024 * 1024 || !/^[A-Za-z0-9+/=]+$/.test(p.data)) continue;
+        if (await Store.getPhoto(p.id).catch(() => null)) { photoOk++; continue; }
+        try { const img = await processImage(b64ToBlob(p.data)); await Store.putPhoto({ id: p.id, ...img, createdAt: Date.now() }); photoOk++; } catch { }
+      }
       if (data.config && !Object.keys(state.cfg.targets || {}).length) { state.cfg = normalizeConfig(data.config); await Store.set('config', state.cfg); }
       state.logs = (await Store.all()).map(normalizeLog).filter(Boolean);
-      toast(`백업에서 ${valid.length}건을 불러왔습니다${skipped ? ` · 형식이 맞지 않는 ${skipped}건 제외` : ''}`); setTab(state.tab);
+      toast(`백업에서 ${valid.length}건${photoOk ? `, 사진 ${photoOk}장` : ''}을 불러왔습니다${skipped ? ` · 형식이 맞지 않는 ${skipped}건 제외` : ''}`); setTab(state.tab);
     } catch { toast('파일을 읽지 못했습니다. 백업 파일이 맞는지 확인해 주세요'); }
   }
 
@@ -1225,6 +1394,22 @@ h2 .num { letter-spacing: 0; }
   document.addEventListener('click', async e => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.go) return setTab(b.dataset.go);
+    if (b.dataset.photo) { const inp = $(b.dataset.photo === 'camera' ? 'photoCam' : 'photoPick'); if (inp) inp.click(); return; }
+    if (b.dataset.phdel) {
+      const id = b.dataset.phdel;
+      if (state.draftNew.has(id)) { state.draftNew.delete(id); dropPhotoUrls([id]); }
+      else state.draft.photos = (state.draft.photos || []).filter(x => x !== id);
+      return renderPhotoField();
+    }
+    if (b.dataset.view) {
+      const ids = b.dataset.view === '__draft' ? draftPhotoIds() : (byId(b.dataset.view)?.photos || []);
+      return openViewer(ids, Number(b.dataset.vi) || 0);
+    }
+    if (b.dataset.viewer) {
+      const a = b.dataset.viewer;
+      if (a === 'close') return closeViewer();
+      viewer.i = (viewer.i + (a === 'next' ? 1 : -1) + viewer.ids.length) % viewer.ids.length; return showViewer();
+    }
     if (b.dataset.new) return openForm(b.dataset.new);
     if (b.dataset.start) return startTimer(b.dataset.start);
     if (b.dataset.timer) {
@@ -1258,7 +1443,11 @@ h2 .num { letter-spacing: 0; }
       const id = b.dataset.del;
       if (state.pendingDelete !== id) { state.pendingDelete = id; render(); clearTimeout(state._delT); state._delT = setTimeout(() => { state.pendingDelete = null; render(); }, 3500); return; }
       state.pendingDelete = null;
-      try { await Store.del(id); state.logs = state.logs.filter(l => l.id !== id); toast('삭제했습니다'); render(); }
+      try {
+        const gone = byId(id)?.photos || [];
+        await Store.del(id); if (gone.length) { await Store.delPhotos(gone); dropPhotoUrls(gone); }
+        state.logs = state.logs.filter(l => l.id !== id); toast('삭제했습니다'); render();
+      }
       catch { toast('삭제하지 못했습니다. 다시 시도해 주세요.'); }
       return;
     }
@@ -1273,13 +1462,20 @@ h2 .num { letter-spacing: 0; }
       return;
     }
   });
+  document.addEventListener('change', e => {
+    if (e.target && (e.target.id === 'photoCam' || e.target.id === 'photoPick')) { addPhotos(e.target.files); e.target.value = ''; }
+  });
+  $('viewer').addEventListener('click', e => { if (e.target.id === 'viewer') closeViewer(); });
   document.addEventListener('input', e => {
     const f = e.target.dataset?.f; if (!f || !state.draftType) return;
     state.draft[f] = e.target.value;
     if (f === 'mins') { const n = Number(e.target.value.replace(/[^0-9]/g, '')); $('minsRead').textContent = n ? fmtMins(n) : ''; }
   });
   $('sheetClose').onclick = closeForm; $('scrim').onclick = closeForm;
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.draftType) closeForm(); });
+  document.addEventListener('keydown', e => {
+    if (!$('viewer').hidden) { if (e.key === 'Escape') closeViewer(); else if (e.key === 'ArrowRight') document.querySelector('.vnext').click(); else if (e.key === 'ArrowLeft') document.querySelector('.vprev').click(); return; }
+    if (e.key === 'Escape' && state.draftType) closeForm();
+  });
   $('formSave').onclick = saveForm;
   $('mPrev').onclick = () => { state.month = shiftMonth(state.month, -1); render(); };
   $('mNext').onclick = () => { if (state.month < curMonth()) { state.month = shiftMonth(state.month, 1); render(); } };
@@ -1350,6 +1546,7 @@ h2 .num { letter-spacing: 0; }
     const App = window.Capacitor?.Plugins?.App;
     if (!App || !App.addListener) return;
     App.addListener('backButton', () => {
+      if (!$('viewer').hidden) return closeViewer();
       if (state.draftType) return closeForm();
       if (state.tab !== 'rec') return setTab('rec');
       App.exitApp();
