@@ -219,6 +219,42 @@ h2 .num { letter-spacing: 0; }
 .nav button { border: 0; background: none; padding: 10px 4px 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); position: relative; }
 .nav button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .nav button[aria-current="page"] { color: var(--accent); font-weight: 500; }
+/* follow-ups */
+.todo-box { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.todo-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.todo-head b { font-size: 14px; }
+.todo-head .chips { display: flex; gap: 6px; }
+.todo { display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--line); }
+.todo-head + .todo { border-top: 0; }
+.todo-check { width: 26px; height: 26px; border-radius: 8px; border: 2px solid var(--line); background: var(--surface); padding: 0; }
+.todo-check:hover { border-color: var(--ok); }
+.todo-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.todo-title { font-weight: 500; overflow-wrap: anywhere; }
+.todo-sub { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.todo-sub .src { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.todo-acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.due { font-weight: 600; font-family: var(--f-mono); font-size: 12px; }
+.due.over { color: var(--bad); } .due.today { color: var(--warn); } .due.soon { color: var(--accent); } .due.later { color: var(--muted); }
+.todo.over { box-shadow: inset 3px 0 0 var(--bad); } .todo.today { box-shadow: inset 3px 0 0 var(--warn); }
+.todo-more { padding: 9px 14px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+.todo-more button { border: 0; background: none; color: var(--accent); font-size: 13px; padding: 0; }
+.fu-list { display: flex; flex-direction: column; gap: 8px; }
+.fu-edit { border: 1px solid var(--line); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--paper); }
+.fu-edit.done { opacity: .6; }
+.fu-edit.done input[data-fuf="title"] { text-decoration: line-through; }
+.fu-row1 { display: grid; grid-template-columns: 34px 1fr 34px; gap: 8px; align-items: center; }
+.fu-row2 { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.field .fu-edit input[type="text"], .field .fu-edit input[type="date"], .field .fu-edit input[type="time"] { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; font-size: 16px; min-width: 0; }
+.field .fu-edit input[type="text"] { width: 100%; }
+.field .fu-edit input[type="date"] { width: 160px; } .field .fu-edit input[type="time"] { width: 120px; }
+.fu-check { width: 34px; height: 34px; border-radius: 9px; border: 2px solid var(--line); background: var(--surface); color: transparent; font-weight: 700; padding: 0; }
+.fu-check[aria-pressed="true"] { background: var(--ok); border-color: var(--ok); color: #fff; }
+.fu-del { width: 34px; height: 34px; border-radius: 50%; border: 0; background: var(--surface); color: var(--muted); font-size: 18px; padding: 0; }
+.fu-quick { display: flex; gap: 6px; flex-wrap: wrap; }
+.fu-quick button { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 4px 9px; font-size: 12px; color: var(--muted); }
+.row-fu { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.row-fu .over { color: var(--bad); font-weight: 600; } .row-fu .today { color: var(--warn); font-weight: 600; } .row-fu s { opacity: .7; }
+.nav .badge.red { background: var(--bad); }
 .nav .badge { position: absolute; top: 6px; left: calc(50% + 6px); min-width: 16px; height: 16px; border-radius: 999px; background: var(--warn); color: var(--surface); font-size: 10px; font-family: var(--f-mono); line-height: 16px; padding: 0 4px; }
 
 /* sheet */
@@ -288,11 +324,12 @@ h2 .num { letter-spacing: 0; }
   .tags { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
 
   #tab-rec { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+  #todoBox { grid-column: 1 / -1; }
   .blk-today { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 84px); max-height: calc(100vh - 190px); overflow-y: auto; }
 
   #tab-kpi { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px 24px; align-items: start;
-    grid-template-areas: "overall overall" "open mix" "kpi kpi" "hint hint"; }
-  .blk-overall { grid-area: overall; } .blk-open { grid-area: open; } .blk-mix { grid-area: mix; } .blk-kpi { grid-area: kpi; } #tab-kpi .hint { grid-area: hint; }
+    grid-template-areas: "overall overall" "fu open" "mix mix" "kpi kpi" "hint hint"; }
+  .blk-overall { grid-area: overall; } .blk-open { grid-area: open; } .blk-mix { grid-area: mix; } .blk-kpi { grid-area: kpi; } .blk-fu { grid-area: fu; } #tab-kpi .hint { grid-area: hint; }
   .kpis .grp { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
   .kpis .grp-label { grid-column: 1 / -1; }
 
@@ -325,6 +362,7 @@ h2 .num { letter-spacing: 0; }
 
   <!-- 기록 -->
   <section id="tab-rec" data-tab="rec">
+    <div id="todoBox" class="blk" hidden></div>
     <div id="tagGroups" class="blk-tags" style="display:flex;flex-direction:column;gap:16px"></div>
     <div class="blk blk-today">
       <h2><span>오늘 기록</span><span class="num" id="todayCount"></span></h2>
@@ -344,6 +382,10 @@ h2 .num { letter-spacing: 0; }
       </div>
       <div class="timebar" aria-hidden="true"><i id="timeFill"></i></div>
       <div class="cap" id="timeCap"></div>
+    </div>
+    <div class="blk blk-fu">
+      <h2><span>후속 업무</span><span class="num" id="fuCount"></span></h2>
+      <div id="fuAll"></div>
     </div>
     <div class="blk blk-open">
       <h2><span>미결 건</span><span class="num" id="openCount"></span></h2>
@@ -369,6 +411,8 @@ h2 .num { letter-spacing: 0; }
   <!-- 설정 -->
   <section id="tab-set" data-tab="set" hidden>
     <div class="blk blk-data">
+    <h2>후속 업무 알림</h2>
+    <div class="data-box" id="notifBox"></div>
     <h2>기기 연동 · 암호화</h2>
     <div class="data-box" id="syncBox"></div>
     <h2>데이터 · 백업</h2>
@@ -407,7 +451,7 @@ h2 .num { letter-spacing: 0; }
 
 <nav class="nav" aria-label="메뉴">
   <div class="nav-in">
-    <button data-go="rec" aria-current="page"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>기록</button>
+    <button data-go="rec" aria-current="page"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>기록<span class="badge red" id="navBadgeRec" hidden></span></button>
     <button data-go="kpi"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>현황<span class="badge" id="navBadge" hidden></span></button>
     <button data-go="log"><svg viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg>일지</button>
     <button data-go="set"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>설정</button>

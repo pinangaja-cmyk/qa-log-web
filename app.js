@@ -14,7 +14,7 @@
     try { history.replaceState(null, '', location.pathname); } catch { }
     return new URLSearchParams(raw);
   })();
-  const APP_VERSION = '2.7';
+  const APP_VERSION = '2.8';
 
   // ---------- work types ----------
   const GROUPS = [
@@ -237,7 +237,8 @@
 
   // Every record is rebuilt from a whitelist of fields with fixed types, so a tampered
   // backup file cannot smuggle markup or unexpected fields into the app.
-  const MAX_PHOTOS = 20;
+  const MAX_PHOTOS = 20, MAX_FOLLOWUPS = 20;
+  const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
   const ID_RE = /^[A-Za-z0-9_-]{1,64}$/, DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   const STR_FIELDS = ['partner', 'item', 'defect', 'action', 'lot', 'detail', 'invoice', 'line', 'note', 'kind', 'status', 'result', 'purpose', 'ptype', 'doneDate', 'topic', 'mtype', 'followup', 'title', 'category'];
   const NUM_FIELDS = { lots: [1, 9999], ngCount: [1, 9999], qty: [0, 1000000], mins: [1, 100000] };
@@ -252,11 +253,21 @@
     Object.entries(NUM_FIELDS).forEach(([f, [lo, hi]]) => { if (r[f] == null || r[f] === '') return; const n = Math.round(Number(r[f])); if (Number.isFinite(n) && n >= lo && n <= hi) l[f] = n; });
     ARR_FIELDS.forEach(f => { if (Array.isArray(r[f])) l[f] = r[f].filter(x => typeof x === 'string').map(x => x.slice(0, 50)).slice(0, 20); });
     if (Array.isArray(r.photos)) { const ph = r.photos.filter(x => typeof x === 'string' && ID_RE.test(x)).slice(0, MAX_PHOTOS); if (ph.length) l.photos = ph; }
+    if (Array.isArray(r.followups)) { const fu = r.followups.slice(0, MAX_FOLLOWUPS).map(normalizeFollowup).filter(Boolean); if (fu.length) l.followups = fu; }
     TIME_FIELDS.forEach(f => { const n = Number(r[f]); if (Number.isFinite(n) && n > 0 && n < 1e14) l[f] = n; });
     if (l.doneDate && !DATE_RE.test(l.doneDate)) delete l.doneDate;
     if (!l.createdAt) l.createdAt = Date.now();
     l.open = isOpen(l);
     return l;
+  }
+  function normalizeFollowup(f) {
+    if (!f || typeof f !== 'object' || typeof f.id !== 'string' || !ID_RE.test(f.id)) return null;
+    const title = typeof f.title === 'string' ? f.title.trim().slice(0, 200) : '';
+    if (!title || typeof f.due !== 'string' || !DATE_RE.test(f.due)) return null;
+    const o = { id: f.id, title, due: f.due, done: f.done === true };
+    if (typeof f.time === 'string' && TIME_RE.test(f.time)) o.time = f.time;
+    const da = Number(f.doneAt); if (o.done && Number.isFinite(da) && da > 0) o.doneAt = da;
+    return o;
   }
   function normalizeConfig(c) {
     const out = { targets: {}, weights: {} };
@@ -473,6 +484,19 @@
     else if (failed) toast(`${failed}장은 열 수 없는 형식이에요. 카메라 설정에서 HEIF 대신 JPG로 저장해 주세요`);
     renderPhotoField();
   }
+  function renderFollowupField(focusId) {
+    const box = $('fuList'); if (!box) return;
+    const list = state.draft.followups || [];
+    box.innerHTML = list.map(f => `<div class="fu-edit ${f.done ? 'done' : ''}">
+      <div class="fu-row1"><button type="button" class="fu-check" data-futoggle="${esc(f.id)}" aria-pressed="${!!f.done}" aria-label="완료">✓</button>
+        <input type="text" data-fuf="title" data-fuid="${esc(f.id)}" value="${esc(f.title || '')}" placeholder="예: 시험 성적서 고객사 회신" maxlength="200" aria-label="후속 업무 내용">
+        <button type="button" class="fu-del" data-fudel="${esc(f.id)}" aria-label="후속 업무 빼기">×</button></div>
+      <div class="fu-row2"><input type="date" data-fuf="due" data-fuid="${esc(f.id)}" value="${esc(f.due || '')}" aria-label="마감일">
+        <input type="time" data-fuf="time" data-fuid="${esc(f.id)}" value="${esc(f.time || '')}" aria-label="알림 시간(선택)">
+        <span class="fu-quick">${[[1, '내일'], [3, '3일 후'], [7, '1주 후']].map(([n, t]) => `<button type="button" data-fudue="${esc(f.id)}" data-days="${n}">${t}</button>`).join('')}</span></div>
+    </div>`).join('');
+    if (focusId) { const el = box.querySelector(`input[data-fuf="title"][data-fuid="${focusId}"]`); if (el) el.focus(); }
+  }
   function draftPhotoIds() { return [...(state.draft.photos || []), ...state.draftNew.keys()]; }
   function renderPhotoField() {
     const box = $('formPhotos'); if (!box) return;
@@ -504,6 +528,7 @@
         <div class="row-title">${d.title || '(이름 없음)'}</div>
         <div class="row-sub">${d.sub}</div>
         ${l.note ? `<div class="row-note">${esc(l.note)}</div>` : ''}
+        ${rowFollowups(l)}
         ${photoStrip(l)}
         <div class="row-sub num" style="font-size:11px">${recNo(l)}${opts.showDate ? ' · ' + dayLabel(l.date) : ''}${when}</div>
         <div class="row-acts">
@@ -604,6 +629,132 @@
     toast('타이머를 버렸습니다'); render();
   }
 
+  // ---------- follow-ups ----------
+  function addDays(dateStr, n) { const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() + n); return ymd(d); }
+  function daysBetween(a, b) { return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000); }
+  function openFollowups() {
+    const out = [];
+    state.logs.forEach(l => (l.followups || []).forEach(f => { if (!f.done) out.push({ f, l }); }));
+    return out.sort((a, b) => a.f.due < b.f.due ? -1 : a.f.due > b.f.due ? 1 : (a.f.time || '99') < (b.f.time || '99') ? -1 : 1);
+  }
+  function dueInfo(f) {
+    const n = daysBetween(today(), f.due);
+    const w = '일월화수목금토'[new Date(f.due + 'T00:00:00').getDay()];
+    const md = `${Number(f.due.slice(5, 7))}/${Number(f.due.slice(8))}(${w})`;
+    if (n < 0) return { cls: 'over', label: `${-n}일 지남` };
+    if (n === 0) return { cls: 'today', label: '오늘' + (f.time ? ' ' + f.time : '') };
+    if (n === 1) return { cls: 'soon', label: '내일' + (f.time ? ' ' + f.time : '') };
+    return { cls: n <= 7 ? 'soon' : 'later', label: `${md} · D-${n}` };
+  }
+  function logTitleText(l) { const [t] = summary(l); return t.filter(Boolean).join(' · ') || TYPES[l.type].label; }
+  function todoHTML({ f, l }) {
+    const d = dueInfo(f), t = TYPES[l.type];
+    const key = `${esc(l.id)}|${esc(f.id)}`;
+    return `<div class="todo ${d.cls}" style="--tc:${t.color}">
+      <button class="todo-check" data-fudone="${key}" aria-label="${esc(f.title)} 완료로 표시"></button>
+      <div class="todo-main"><div class="todo-title">${esc(f.title)}</div>
+        <div class="todo-sub"><span class="due ${d.cls}">${esc(d.label)}</span><span class="chip-code" style="--tc:${t.color}">${t.code}</span><span class="src">${esc(logTitleText(l))}</span></div></div>
+      <div class="todo-acts">${d.cls === 'over' || d.cls === 'today' ? `<button class="mini" data-fusnooze="${key}">내일로</button>` : ''}<button class="mini" data-edit="${esc(l.id)}">열기</button></div>
+    </div>`;
+  }
+  function renderTodo() {
+    const box = $('todoBox'); if (!box) return;
+    const all = openFollowups(), t0 = today(), week = addDays(t0, 7);
+    const over = all.filter(x => x.f.due < t0), tod = all.filter(x => x.f.due === t0), soon = all.filter(x => x.f.due > t0 && x.f.due <= week);
+    const shown = [...over, ...tod, ...soon];
+    if (!shown.length) { box.hidden = true; box.innerHTML = ''; return; }
+    const MAX = 6, rest = all.length - Math.min(shown.length, MAX);
+    box.hidden = false;
+    box.innerHTML = `<div class="todo-box"><div class="todo-head"><b>할 일 · 후속 업무</b><span class="chips">${over.length ? `<span class="pill bad">지남 ${over.length}</span>` : ''}${tod.length ? `<span class="pill warn">오늘 ${tod.length}</span>` : ''}${soon.length ? `<span class="pill mute">이번 주 ${soon.length}</span>` : ''}</span></div>
+      ${shown.slice(0, MAX).map(todoHTML).join('')}
+      ${rest > 0 ? `<div class="todo-more"><span>나머지 ${rest}건</span><button data-go="kpi">전체 보기</button></div>` : ''}</div>`;
+  }
+  function renderFollowupsAll() {
+    const box = $('fuAll'); if (!box) return;
+    const all = openFollowups();
+    const doneThisMonth = state.logs.reduce((n, l) => n + (l.followups || []).filter(f => f.done && f.doneAt && ymd(new Date(f.doneAt)).slice(0, 7) === curMonth()).length, 0);
+    $('fuCount').textContent = all.length ? `${all.length}건 남음` : '';
+    box.innerHTML = all.length
+      ? `<div class="todo-box">${all.map(todoHTML).join('')}${doneThisMonth ? `<div class="todo-more"><span>이번 달 완료 ${doneThisMonth}건</span></div>` : ''}</div>`
+      : `<div class="empty">남은 후속 업무가 없어요.${doneThisMonth ? ` 이번 달 ${doneThisMonth}건 완료.` : ''}<br>기록을 열어 <b>+ 후속 업무 추가</b>로 마감일을 정하면 여기에 모입니다.</div>`;
+  }
+  function rowFollowups(l) {
+    const fu = l.followups || []; if (!fu.length) return '';
+    return `<div class="row-fu">${fu.map(f => { if (f.done) return `<span><s>↳ ${esc(f.title)}</s> ✓</span>`; const d = dueInfo(f); return `<span>↳ ${esc(f.title)} · <span class="${d.cls === 'over' || d.cls === 'today' ? d.cls : ''}">${esc(d.label)}</span></span>`; }).join('')}</div>`;
+  }
+  async function updateFollowup(logId, fid, patch, msg) {
+    const l = byId(logId); if (!l) return;
+    const next = { ...l, followups: (l.followups || []).map(f => f.id === fid ? { ...f, ...patch } : f), updatedAt: Date.now() };
+    try { await Store.put(next); state.logs = state.logs.map(x => x.id === next.id ? next : x); markDirty(next.id); toast(msg); render(); }
+    catch { toast('변경하지 못했습니다. 다시 시도해 주세요.'); }
+  }
+
+  // Android notifications (the web app shows follow-ups on screen only)
+  const notif = { perm: 'unsupported', time: '09:00', lastKey: '' };
+  const LN = () => (isNative() && window.Capacitor?.Plugins?.LocalNotifications) || null;
+  function hashId(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return 1000 + ((h >>> 0) % 2000000000); }
+  async function notifInit() {
+    try { const t = await Store.get('notifTime'); if (typeof t === 'string' && TIME_RE.test(t)) notif.time = t; } catch { }
+    const ln = LN(); if (!ln) return;
+    try {
+      notif.perm = (await ln.checkPermissions()).display;
+      // Private lock-screen visibility: task names stay hidden until the phone is unlocked.
+      await ln.createChannel({ id: 'followups', name: '후속 업무', description: '후속 업무 마감 알림', importance: 4, visibility: 0, vibration: true });
+      ln.addListener('localNotificationActionPerformed', () => { if (state.draftType) closeForm(); setTab('rec'); });
+    } catch (e) { rememberJsError('notif init: ' + (e && e.message)); }
+  }
+  async function askNotifPermission() {
+    const ln = LN(); if (!ln) return false;
+    try { notif.perm = (await ln.requestPermissions()).display; } catch { }
+    notif.lastKey = ''; scheduleNotifs(); renderNotif();
+    return notif.perm === 'granted';
+  }
+  let notifTimer = null;
+  function scheduleNotifs() {
+    if (!LN() || notif.perm !== 'granted') return;
+    const all = openFollowups();
+    const key = today() + '|' + notif.time + '|' + all.map(x => `${x.f.id}:${x.f.due}:${x.f.time || ''}:${x.f.title.length}`).join(',');
+    if (key === notif.lastKey) return;
+    clearTimeout(notifTimer);
+    notifTimer = setTimeout(() => rescheduleNotifs(all, key).catch(e => rememberJsError('notif: ' + (e && e.message))), 700);
+  }
+  async function rescheduleNotifs(all, key) {
+    const ln = LN(); if (!ln) return;
+    const pending = (await ln.getPending()).notifications || [];
+    if (pending.length) await ln.cancel({ notifications: pending.map(n => ({ id: n.id })) });
+    const items = [], now = Date.now(), t0 = today();
+    all.forEach(({ f }) => {
+      if (!f.time) return;
+      const at = new Date(`${f.due}T${f.time}:00`);
+      if (at.getTime() > now + 30000) items.push({ id: hashId(f.id), title: '후속 업무 마감', body: `${f.title} · ${f.time}`, schedule: { at, allowWhileIdle: true }, channelId: 'followups', extra: { qalog: 1 } });
+    });
+    for (let d = 0; d < 14; d++) { // morning summary: due that day + still overdue
+      const day = addDays(t0, d), at = new Date(`${day}T${notif.time}:00`);
+      if (at.getTime() <= now + 30000) continue;
+      const dueN = all.filter(x => x.f.due === day).length, overN = all.filter(x => x.f.due < day).length;
+      if (!dueN && !overN) continue;
+      items.push({ id: 100 + d, title: '오늘의 후속 업무', body: [dueN && `오늘 마감 ${dueN}건`, overN && `기한 지난 ${overN}건`].filter(Boolean).join(' · '),
+        schedule: { at, allowWhileIdle: true }, channelId: 'followups', extra: { qalog: 1 } });
+    }
+    if (items.length) await ln.schedule({ notifications: items.slice(0, 64) });
+    notif.lastKey = key;
+  }
+  function renderNotif() {
+    const box = $('notifBox'); if (!box) return;
+    if (!LN()) {
+      box.innerHTML = `<div class="stat">이 기기에서는 화면 표시만 돼요</div>
+        <p>아이폰 웹앱은 앱이 닫혀 있을 때 알림을 보낼 수 없어요. 앱을 열면 <b>기록</b> 탭 맨 위 "할 일"에 기한이 지난 것과 오늘 마감인 후속 업무가 먼저 보입니다.</p>`;
+      return;
+    }
+    const st = { granted: ['on', '알림 켜짐'], denied: ['err', '알림 꺼짐'], prompt: ['', '알림 허용 전'], 'prompt-with-rationale': ['', '알림 허용 전'] }[notif.perm] || ['', '확인 중'];
+    box.innerHTML = `<div class="sync-head"><span class="sync-dot ${st[0]}">${st[1]}</span></div>
+      <label>매일 알림 시각<input type="time" id="notifTime" value="${esc(notif.time)}" style="border:1px solid var(--line);background:var(--paper);border-radius:10px;padding:10px 12px;font-size:16px;max-width:160px"></label>
+      <p>이 시각에 그날 마감인 후속 업무와 기한이 지난 후속 업무 수를 알려 드려요. 시간을 정한 후속 업무는 그 시간에 따로 알려 드립니다. 잠금화면에서는 내용이 숨겨져요.</p>
+      ${notif.perm === 'granted' ? '' : notif.perm === 'denied'
+        ? '<div class="note-warn">알림이 꺼져 있어요. 휴대폰 <b>설정 → 애플리케이션 → QA 업무일지 → 알림</b>에서 켜 주세요.</div>'
+        : '<button class="btn" id="notifAllow">알림 허용</button>'}`;
+  }
+
   // ---------- render ----------
   function renderHeader() {
     $('mLabel').textContent = monthLabel(state.month);
@@ -612,10 +763,13 @@
     $('mNext').disabled = atNow; $('mNext').style.opacity = atNow ? .3 : 1;
     const n = openLogs().length;
     $('navBadge').textContent = n; $('navBadge').hidden = !n;
+    const t0 = today(), urgent = openFollowups().filter(x => x.f.due <= t0).length;
+    $('navBadgeRec').textContent = urgent; $('navBadgeRec').hidden = !urgent;
     renderTimer();
   }
 
   function renderRec() {
+    renderTodo();
     const mm = Number(state.month.slice(5)); const ml = monthLogs(); const ol = openLogs();
     $('tagGroups').innerHTML = GROUPS.map(g => `<div class="grp" style="--gc:${g.color}">
       <div class="grp-label">${g.label}</div>
@@ -638,6 +792,7 @@
   }
 
   function renderKpi() {
+    renderFollowupsAll();
     const ml = monthLogs();
     const a = compute(ml); const frac = elapsed(state.month);
     let wsum = 0, asum = 0;
@@ -714,6 +869,7 @@
     renderDataStat();
     renderDiag();
     renderSync();
+    renderNotif();
     $('verLabel').textContent = `QA 업무일지 v${APP_VERSION} · ${isNative() ? '안드로이드 앱' : '웹앱'}`;
   }
   function renderDataStat() {
@@ -732,6 +888,7 @@
     if (state.tab === 'log') renderLog();
     if (state.tab === 'set') renderDataStat();
     hydratePhotos(document.querySelector(`[data-tab="${state.tab}"]`));
+    scheduleNotifs();
   }
 
   function setTab(t) {
@@ -822,6 +979,9 @@
       }
       return '';
     }).join('') + `
+      <div class="field"><span>후속 업무<i>선택 · 마감일은 필수, 시간을 정하면 그 시간에 알려 드려요</i></span>
+        <div class="fu-list" id="fuList"></div>
+        <button type="button" class="mini" data-fuadd="1" style="align-self:flex-start">+ 후속 업무 추가</button></div>
       <div class="field"><span>사진<i>선택 · 여러 장 가능</i> <i id="photoCount"></i></span>
         <div class="photos" id="formPhotos"></div>
         <div class="quick"><button type="button" data-photo="camera">카메라로 찍기</button><button type="button" data-photo="pick">사진 선택</button><span class="photo-busy" id="photoBusy" hidden>사진 넣는 중…</span></div>
@@ -834,6 +994,7 @@
       <div class="field"><span>날짜</span><input type="date" id="fld_date" data-f="date" value="${esc(d.date)}" max="${today()}"></div>`;
     $('formBody').innerHTML = html;
     renderPhotoField();
+    renderFollowupField();
   }
 
   function buildDoc(type, d) {
@@ -866,7 +1027,12 @@
     if (miss) return err(`${miss.label}을(를) ${miss.type === 'multi' ? '선택' : '입력'}해 주세요.`);
     if (!d.date) return err('날짜를 선택해 주세요.');
     if (!state.ok) return err('저장소를 열지 못해 저장할 수 없습니다. 앱을 다시 실행해 주세요.');
+    const fuDraft = (d.followups || []).filter(f => String(f.title || '').trim());
+    const fuBad = fuDraft.find(f => !DATE_RE.test(String(f.due || '')));
+    if (fuBad) return err(`후속 업무 "${String(fuBad.title).trim().slice(0, 20)}"의 마감일을 정해 주세요.`);
     const doc = buildDoc(type, d);
+    const fu = fuDraft.map(f => normalizeFollowup({ ...f, time: f.time || undefined, doneAt: f.done ? (f.doneAt || Date.now()) : undefined })).filter(Boolean);
+    if (fu.length) doc.followups = fu;
     const photoIds = draftPhotoIds();
     if (photoIds.length) doc.photos = photoIds;
     $('formSave').disabled = true;
@@ -898,6 +1064,7 @@
       }
       if (d._fromTimer) { state.timer = null; await Store.remove('timer'); }
       if (photoIds.length) msg += ` · 사진 ${photoIds.length}장`;
+      if (fu.some(f => !f.done)) { msg += ` · 후속 업무 ${fu.filter(f => !f.done).length}건`; if (LN() && (notif.perm === 'prompt' || notif.perm === 'prompt-with-rationale')) setTimeout(askNotifPermission, 600); }
       state.draftNew = new Map(); // saved: keep their preview URLs cached
       closeForm(); toast(msg); render();
     } catch (e) {
@@ -933,11 +1100,12 @@
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   function buildCsv(logs) {
-    const head = ['날짜', '업무', '코드', '대상', '내용', '미결', '소요(분)', '시작', '종료', '메모', '사진', '기록번호'];
+    const head = ['날짜', '업무', '코드', '대상', '내용', '미결', '소요(분)', '시작', '종료', '메모', '사진', '후속 업무', '기록번호'];
     const rows = logs.slice().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : (a.createdAt || 0) - (b.createdAt || 0)).map(l => {
       const [t, d] = summary(l);
       return [l.date, TYPES[l.type]?.label, TYPES[l.type]?.code, t.filter(Boolean).join(' / '), d.filter(Boolean).join(' / '), l.open ? '미결' : '',
-        l.mins || '', l.startAt ? hm(l.startAt) : '', l.endAt ? hm(l.endAt) : '', l.note, l.photos?.length ? `${l.photos.length}장` : '', recNo(l)];
+        l.mins || '', l.startAt ? hm(l.startAt) : '', l.endAt ? hm(l.endAt) : '', l.note, l.photos?.length ? `${l.photos.length}장` : '',
+        (l.followups || []).map(f => `${f.title}(${f.due.slice(5).replace('-', '/')}${f.time ? ' ' + f.time : ''}, ${f.done ? '완료' : f.due < today() ? '지남' : '진행'})`).join('; '), recNo(l)];
     });
     return '﻿' + [head, ...rows].map(r => r.map(csvCell).join(',')).join('\n');
   }
@@ -1075,6 +1243,26 @@
       $('fld_' + f).value = state.draft[f]; return;
     }
     if (b.dataset.edit) { const l = byId(b.dataset.edit); if (l) openForm(l.type, l); return; }
+    if (b.dataset.fuadd) {
+      const list = state.draft.followups = state.draft.followups || [];
+      if (list.length >= MAX_FOLLOWUPS) { toast(`후속 업무는 한 기록에 ${MAX_FOLLOWUPS}건까지예요`); return; }
+      const id = newId(); list.push({ id, title: '', due: addDays(today(), 1), done: false });
+      return renderFollowupField(id);
+    }
+    if (b.dataset.fudel) { state.draft.followups = (state.draft.followups || []).filter(f => f.id !== b.dataset.fudel); return renderFollowupField(); }
+    if (b.dataset.futoggle) {
+      const f = (state.draft.followups || []).find(x => x.id === b.dataset.futoggle);
+      if (f) { f.done = !f.done; f.doneAt = f.done ? Date.now() : undefined; }
+      return renderFollowupField();
+    }
+    if (b.dataset.fudue) {
+      const f = (state.draft.followups || []).find(x => x.id === b.dataset.fudue);
+      if (f) f.due = addDays(today(), Number(b.dataset.days) || 1);
+      return renderFollowupField();
+    }
+    if (b.dataset.fudone) { const [lid, fid] = b.dataset.fudone.split('|'); return updateFollowup(lid, fid, { done: true, doneAt: Date.now() }, '후속 업무를 완료했습니다'); }
+    if (b.dataset.fusnooze) { const [lid, fid] = b.dataset.fusnooze.split('|'); return updateFollowup(lid, fid, { due: addDays(today(), 1) }, '내일로 미뤘습니다'); }
+    if (b.id === 'notifAllow') return askNotifPermission();
     if (b.dataset.del) {
       const id = b.dataset.del;
       if (state.pendingDelete !== id) { state.pendingDelete = id; render(); clearTimeout(state._delT); state._delT = setTimeout(() => { state.pendingDelete = null; render(); }, 3500); return; }
@@ -1105,6 +1293,13 @@
   });
   $('viewer').addEventListener('click', e => { if (e.target.id === 'viewer') closeViewer(); });
   document.addEventListener('input', e => {
+    const fuf = e.target.dataset?.fuf;
+    if (fuf && state.draftType) {
+      const item = (state.draft.followups || []).find(x => x.id === e.target.dataset.fuid);
+      if (item) item[fuf] = e.target.value;
+      return;
+    }
+    if (e.target.id === 'notifTime' && TIME_RE.test(e.target.value)) { notif.time = e.target.value; Store.set('notifTime', notif.time).catch(() => {}); scheduleNotifs(); return; }
     const f = e.target.dataset?.f; if (!f || !state.draftType) return;
     if (e.target.dataset.num !== undefined) { const v = e.target.value.replace(/[^0-9]/g, '').slice(0, 4); if (v !== e.target.value) e.target.value = v; }
     state.draft[f] = e.target.value;
@@ -1575,6 +1770,7 @@
       banner('저장소를 열지 못했습니다. 앱을 완전히 종료한 뒤 다시 실행해 주세요.');
     }
     hookBackButton();
+    await notifInit();
     registerServiceWorker();
     await loadDiag();
     handleAuthReturn();

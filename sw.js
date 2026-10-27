@@ -1,6 +1,6 @@
 // Offline support for the web version (iPhone "홈 화면에 추가").
 // Network first so updates show up right away; falls back to the cached copy offline.
-const CACHE = 'qalog-2.7';
+const CACHE = 'qalog-2.8';
 const SHELL = ['./', './index.html', './app.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 
 self.addEventListener('install', event => {
